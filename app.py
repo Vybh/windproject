@@ -24,6 +24,13 @@ st.set_page_config(
 DATA_DIR    = Path("data/processed")
 FIGURES_DIR = Path("figures")
 
+# ── Colour helpers ────────────────────────────────────────────────────────────
+def hex_to_rgba(hex_color: str, alpha: float = 0.53) -> str:
+    """Convert '#RRGGBB' to 'rgba(r,g,b,alpha)' for Plotly compatibility."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 # ── Colour palette ─────────────────────────────────────────────────────────────
 FAULT_COLORS = {
     "normal":     "#4CAF50",
@@ -195,7 +202,7 @@ if page == "🏠  Overview":
         fig.add_trace(go.Bar(
             name="Severity Generalisation",
             x=models, y=gen_vals,
-            marker_color=[c + "88" for c in colors],
+            marker_color=[hex_to_rgba(c) for c in colors],
             marker_pattern_shape="/",
             text=[f"{v:.2%}" for v in gen_vals],
             textposition="outside",
@@ -384,7 +391,7 @@ elif page == "🤖  Model Results":
                 x=["5-Fold CV", "Severity Generalisation"],
                 y=[row["cv_accuracy"], row["gen_accuracy"]],
                 name=row["model"],
-                marker_color=[color, color + "88"],
+                marker_color=[color, hex_to_rgba(color)],
                 text=[f"{row['cv_accuracy']:.2%}", f"{row['gen_accuracy']:.2%}"],
                 textposition="outside",
             ))
@@ -418,7 +425,7 @@ elif page == "🤖  Model Results":
         ))
         fig.add_trace(go.Bar(
             x=sub["class"], y=sub["gen_f1"],
-            name="Severity Gen", marker_color=MODEL_COLORS.get(sel_model, "#999") + "88",
+            name="Severity Gen", marker_color=hex_to_rgba(MODEL_COLORS.get(sel_model, "#4CAF50")),
             marker_pattern_shape="/",
             text=[f"{v:.3f}" for v in sub["gen_f1"]], textposition="outside",
         ))
