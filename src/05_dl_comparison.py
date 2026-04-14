@@ -4,17 +4,31 @@
 Train deep learning models on VAE-augmented dataset and compare
 against classical ML results from Script 02.
 
+GAP 1 IMPLEMENTED: Two CNN experiments are run:
+  (a) Feature-based CNN (15-feature tabular vector reshaped to (15,1))
+      This shows tree ensembles beat CNNs on pre-engineered tabular features.
+  (b) Raw-signal CNN (1024-point raw vibration windows, no feature engineering)
+      This is the real DL vs ML question: can end-to-end DL match XGBoost?
+
 Critical rule — train on real+synthetic, test on real only:
   StratifiedKFold on real rows only; all synthetic rows added to every
   training fold. Test folds contain only is_synthetic==False rows.
+
+NOTE: The feature-based CNN result (a) does NOT generalise to the claim
+"deep learning is inferior" — it is specifically inferior when applied to
+pre-summarised tabular features. Experiment (b) addresses the real question.
 
 Inputs:
     data/processed/features_augmented.csv
     data/processed/model_results_expanded.csv
     data/processed/noise_robustness_expanded.csv
+    data/raw/DE_12k/*.mat  (for raw-signal CNN)
+    data/raw/FE_12k/*.mat  (for raw-signal CNN)
+    data/raw/normal/*.mat  (for raw-signal CNN)
 
 Outputs (data/processed/):
     dl_results.csv
+    raw_cnn_results.csv
     autoencoder_results.csv
 
 Outputs (figures/):
@@ -24,6 +38,7 @@ Outputs (figures/):
     dl_per_class_f1.png
     dl_noise_robustness.png
     autoencoder_violin.png
+    raw_cnn_vs_xgboost.png
 """
 
 import os
@@ -628,17 +643,30 @@ def main():
         FIGURES_DIR / "autoencoder_violin.png",
     )
 
+    # ── Raw-signal CNN experiment (GAP 1) ────────────────────────────────────
+    xgb_acc_for_raw = classical_acc.get("XGBoost", float("nan"))
+    raw_cnn_result  = run_raw_cnn(xgb_acc_for_raw)
+
     # ── Final summary ─────────────────────────────────────────────────────────
     width = 65
     print("\n" + "=" * width)
     print("FINAL SUMMARY")
     print("=" * width)
-    print(f"  CNN Mean Accuracy  : {mean_acc:.4f} ± {std_acc:.4f}")
+    print(f"  Feature-based CNN  : {mean_acc:.4f} ± {std_acc:.4f}  (input=15-feat tabular)")
     print(f"  CNN Best Fold Acc  : {best_fold_acc:.4f}  (fold {best_fold_idx + 1})")
-    xgb_acc = classical_acc.get("XGBoost", float("nan"))
-    delta   = mean_acc - xgb_acc
+    xgb_acc_v = classical_acc.get("XGBoost", float("nan"))
+    delta   = mean_acc - xgb_acc_v
     sign    = "+" if delta >= 0 else ""
-    print(f"  CNN vs XGBoost     : {mean_acc:.4f} vs {xgb_acc:.4f}  ({sign}{delta:+.4f})")
+    print(f"  Feature CNN vs XGB : {mean_acc:.4f} vs {xgb_acc_v:.4f}  ({sign}{delta:+.4f})")
+    if raw_cnn_result:
+        raw_acc = raw_cnn_result["cv_accuracy"]
+        delta_r = raw_acc - xgb_acc_v
+        print(f"  Raw-signal CNN     : {raw_acc:.4f}  (input=1024-pt raw window)")
+        print(f"  Raw CNN vs XGB     : {raw_acc:.4f} vs {xgb_acc_v:.4f}  ({delta_r:+.4f})")
+    print()
+    print("  NOTE: Feature-based CNN on pre-engineered tabular features is NOT")
+    print("  a fair DL vs ML comparison. See raw-signal CNN result above for")
+    print("  the genuine end-to-end deep learning comparison.")
     print()
     print("  Autoencoder Results:")
     for _, row in ae_df.iterrows():
@@ -648,6 +676,362 @@ def main():
         else:
             print(f"    {cls:<22}  DR  = {row['detection_rate']:.4f}")
     print("=" * width)
+
+
+# ── Raw-signal CNN (GAP 1) ───────────────────────────────────────────────────
+#
+# Loads raw 1024-point vibration windows directly from .mat files.
+# No feature engineering — the CNN learns directly from the signal.
+# Architecture: (1024, 1) input → Conv1D stack → GlobalAvgPool → Dense.
+# This is the fair DL comparison: end-to-end learning vs XGBoost+feature-eng.
+
+import re as _re
+import scipy.io as _sio
+
+# CWRU file → (label, fault_size) lookups (subset: ball faults + inner/outer + normal)
+_DE_MAP: dict[int, tuple[str, str]] = {
+    # normal (DE channel)
+    97: ("normal","none"), 98: ("normal","none"),
+    99: ("normal","none"), 100: ("normal","none"),
+    # DE inner race
+    105:("DE_inner_race","0.007"),106:("DE_inner_race","0.007"),
+    107:("DE_inner_race","0.007"),108:("DE_inner_race","0.007"),
+    169:("DE_inner_race","0.014"),170:("DE_inner_race","0.014"),
+    171:("DE_inner_race","0.014"),172:("DE_inner_race","0.014"),
+    209:("DE_inner_race","0.021"),210:("DE_inner_race","0.021"),
+    211:("DE_inner_race","0.021"),212:("DE_inner_race","0.021"),
+    # DE ball
+    118:("DE_ball","0.007"),119:("DE_ball","0.007"),
+    120:("DE_ball","0.007"),121:("DE_ball","0.007"),
+    185:("DE_ball","0.014"),186:("DE_ball","0.014"),
+    187:("DE_ball","0.014"),188:("DE_ball","0.014"),
+    222:("DE_ball","0.021"),223:("DE_ball","0.021"),
+    224:("DE_ball","0.021"),225:("DE_ball","0.021"),
+    # DE outer race
+    130:("DE_outer_race","0.007"),131:("DE_outer_race","0.007"),
+    132:("DE_outer_race","0.007"),133:("DE_outer_race","0.007"),
+    197:("DE_outer_race","0.014"),198:("DE_outer_race","0.014"),
+    199:("DE_outer_race","0.014"),200:("DE_outer_race","0.014"),
+    234:("DE_outer_race","0.021"),235:("DE_outer_race","0.021"),
+    236:("DE_outer_race","0.021"),237:("DE_outer_race","0.021"),
+}
+_FE_MAP: dict[int, tuple[str, str]] = {
+    # FE inner race
+    278:("FE_inner_race","0.007"),279:("FE_inner_race","0.007"),
+    280:("FE_inner_race","0.007"),281:("FE_inner_race","0.007"),
+    282:("FE_inner_race","0.014"),283:("FE_inner_race","0.014"),
+    284:("FE_inner_race","0.014"),285:("FE_inner_race","0.014"),
+    286:("FE_inner_race","0.021"),287:("FE_inner_race","0.021"),
+    288:("FE_inner_race","0.021"),289:("FE_inner_race","0.021"),
+    # FE ball
+    290:("FE_ball","0.007"),291:("FE_ball","0.007"),
+    292:("FE_ball","0.007"),293:("FE_ball","0.007"),
+    # FE outer race
+    294:("FE_outer_race","0.007"),295:("FE_outer_race","0.007"),
+    296:("FE_outer_race","0.007"),297:("FE_outer_race","0.007"),
+    298:("FE_outer_race","0.014"),299:("FE_outer_race","0.014"),
+    300:("FE_outer_race","0.014"),301:("FE_outer_race","0.014"),
+    302:("FE_outer_race","0.021"),305:("FE_outer_race","0.021"),
+    306:("FE_outer_race","0.021"),307:("FE_outer_race","0.021"),
+}
+
+RAW_WINDOW = 1024
+
+
+def _find_mat_key(mat: dict, sub: str):
+    return next((k for k in mat if not k.startswith("__") and sub in k), None)
+
+
+def load_raw_windows() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """
+    Load raw 1024-sample vibration windows from CWRU .mat files.
+    Returns (X, y, class_names) where X.shape = (n_windows, 1024).
+    This is the input for the raw-signal CNN — no feature engineering.
+    """
+    base    = Path("data/raw")
+    all_X   = []
+    all_y   = []
+    labels  = []
+
+    def _process_dir(mat_dir: Path, file_map: dict, channel: str, is_normal: bool):
+        for mat_path in sorted(mat_dir.glob("*.mat")):
+            try:
+                num = int(mat_path.stem)
+            except ValueError:
+                continue
+            if num not in file_map:
+                # Normal dir: try both channels
+                if is_normal:
+                    pass
+                else:
+                    continue
+
+            if is_normal:
+                label, fault_size = "normal", "none"
+                channels = [("DE_time", "DE"), ("FE_time", "FE")]
+            else:
+                if num not in file_map:
+                    continue
+                label, fault_size = file_map[num]
+                channels = [(channel, "")]
+
+            try:
+                mat = _sio.loadmat(str(mat_path))
+            except Exception:
+                continue
+
+            for ch, _bl in channels:
+                sig_key = _find_mat_key(mat, ch)
+                if sig_key is None:
+                    continue
+                signal = mat[sig_key].flatten().astype(np.float32)
+                n_win  = len(signal) // RAW_WINDOW
+                for i in range(n_win):
+                    w = signal[i * RAW_WINDOW : (i + 1) * RAW_WINDOW]
+                    all_X.append(w)
+                    all_y.append(label)
+
+    # Normal baseline
+    norm_dir = base / "normal"
+    if norm_dir.exists():
+        for mat_path in sorted(norm_dir.glob("*.mat")):
+            try:
+                mat = _sio.loadmat(str(mat_path))
+            except Exception:
+                continue
+            for ch in ("DE_time", "FE_time"):
+                sig_key = _find_mat_key(mat, ch)
+                if sig_key is None:
+                    continue
+                signal = mat[sig_key].flatten().astype(np.float32)
+                n_win  = len(signal) // RAW_WINDOW
+                for i in range(n_win):
+                    w = signal[i * RAW_WINDOW : (i + 1) * RAW_WINDOW]
+                    all_X.append(w)
+                    all_y.append("normal")
+
+    # DE fault files
+    de_dir = base / "DE_12k"
+    if de_dir.exists():
+        for mat_path in sorted(de_dir.glob("*.mat")):
+            try:
+                num = int(mat_path.stem)
+            except ValueError:
+                continue
+            if num not in _DE_MAP:
+                continue
+            label, _ = _DE_MAP[num]
+            try:
+                mat = _sio.loadmat(str(mat_path))
+            except Exception:
+                continue
+            sig_key = _find_mat_key(mat, "DE_time")
+            if sig_key is None:
+                continue
+            signal = mat[sig_key].flatten().astype(np.float32)
+            n_win  = len(signal) // RAW_WINDOW
+            for i in range(n_win):
+                w = signal[i * RAW_WINDOW : (i + 1) * RAW_WINDOW]
+                all_X.append(w)
+                all_y.append(label)
+
+    # FE fault files
+    fe_dir = base / "FE_12k"
+    if fe_dir.exists():
+        for mat_path in sorted(fe_dir.glob("*.mat")):
+            try:
+                num = int(mat_path.stem)
+            except ValueError:
+                continue
+            if num not in _FE_MAP:
+                continue
+            label, _ = _FE_MAP[num]
+            try:
+                mat = _sio.loadmat(str(mat_path))
+            except Exception:
+                continue
+            sig_key = _find_mat_key(mat, "FE_time")
+            if sig_key is None:
+                continue
+            signal = mat[sig_key].flatten().astype(np.float32)
+            n_win  = len(signal) // RAW_WINDOW
+            for i in range(n_win):
+                w = signal[i * RAW_WINDOW : (i + 1) * RAW_WINDOW]
+                all_X.append(w)
+                all_y.append(label)
+
+    if not all_X:
+        return np.array([]), np.array([]), []
+
+    X = np.stack(all_X)   # (n, 1024)
+    le_raw = LabelEncoder()
+    y = le_raw.fit_transform(all_y)
+    class_names = list(le_raw.classes_)
+    return X, y, class_names
+
+
+def build_raw_cnn(n_classes: int, window_size: int = RAW_WINDOW) -> keras.Model:
+    """
+    Raw-signal 1D-CNN: input (window_size, 1), learns directly from vibration.
+    Architecture designed for vibration fault classification at 12 kHz.
+    """
+    inp = keras.Input(shape=(window_size, 1))
+    # Block 1: wide kernel to capture low-frequency modulation
+    x = layers.Conv1D(32, kernel_size=64, strides=2, activation="relu", padding="same")(inp)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling1D(pool_size=4)(x)
+    # Block 2
+    x = layers.Conv1D(64, kernel_size=32, activation="relu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling1D(pool_size=4)(x)
+    # Block 3
+    x = layers.Conv1D(128, kernel_size=16, activation="relu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.GlobalAveragePooling1D()(x)
+    x = layers.Dense(128, activation="relu")(x)
+    x = layers.Dropout(0.4)(x)
+    out = layers.Dense(n_classes, activation="softmax")(x)
+    m = keras.Model(inp, out)
+    m.compile(
+        optimizer=keras.optimizers.Adam(0.001),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    return m
+
+
+def run_raw_cnn(xgb_acc: float) -> dict:
+    """
+    Train raw-signal CNN with 5-fold CV. Compare to XGBoost (feature-based).
+    Returns result dict.
+    """
+    print("\n" + "=" * 65)
+    print("RAW-SIGNAL CNN — End-to-End Deep Learning (GAP 1)")
+    print("=" * 65)
+    print("  Loading raw 1024-point vibration windows from .mat files ...")
+
+    X_raw, y_raw, cn = load_raw_windows()
+    if len(X_raw) == 0:
+        print("  [SKIP] Raw .mat files not accessible. Skipping raw-signal CNN.")
+        return {}
+
+    n_classes_raw = len(cn)
+    print(f"  Loaded {len(X_raw):,} windows  Classes ({n_classes_raw}): {cn}")
+    print(f"  Class distribution:")
+    for cls_idx, cls_name in enumerate(cn):
+        n = int((y_raw == cls_idx).sum())
+        print(f"    {cls_name:<25}: {n:>5,}")
+
+    # Normalise raw windows to zero-mean, unit-variance per window
+    mu  = X_raw.mean(axis=1, keepdims=True)
+    sig = X_raw.std(axis=1, keepdims=True) + 1e-8
+    X_norm = ((X_raw - mu) / sig).astype(np.float32)
+
+    skf       = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    fold_accs = []
+
+    for fold_idx, (tr_idx, te_idx) in enumerate(skf.split(X_norm, y_raw)):
+        X_tr = X_norm[tr_idx, :, np.newaxis]
+        y_tr = y_raw[tr_idx]
+        X_te = X_norm[te_idx, :, np.newaxis]
+        y_te = y_raw[te_idx]
+
+        model = build_raw_cnn(n_classes_raw)
+        es    = keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=15, restore_best_weights=True,
+        )
+        model.fit(
+            X_tr, y_tr,
+            validation_data=(X_te, y_te),
+            epochs=60, batch_size=64, callbacks=[es], verbose=0,
+        )
+        _, acc = model.evaluate(X_te, y_te, verbose=0)
+        fold_accs.append(acc)
+        print(f"    Fold {fold_idx+1}: acc={acc:.4f}", flush=True)
+
+    mean_acc = float(np.mean(fold_accs))
+    std_acc  = float(np.std(fold_accs))
+    print(f"\n  Raw-signal CNN: {mean_acc:.4f} ± {std_acc:.4f}")
+    print(f"  XGBoost (feature-based): {xgb_acc:.4f}")
+    delta = mean_acc - xgb_acc
+    sign  = "+" if delta >= 0 else ""
+    print(f"  Gap (Raw CNN − XGBoost): {sign}{delta:.4f}")
+
+    result = {
+        "model": "Raw-Signal CNN",
+        "cv_accuracy": mean_acc,
+        "std_accuracy": std_acc,
+        "n_classes": n_classes_raw,
+        "n_windows": len(X_raw),
+        "notes": f"input=(1024,1), no feature engineering, {N_FOLDS}-fold CV",
+    }
+
+    # Save
+    rows = [{"fold": i+1, "test_accuracy": a} for i, a in enumerate(fold_accs)]
+    rows.append({"fold": "mean", "test_accuracy": mean_acc})
+    rows.append({"fold": "std",  "test_accuracy": std_acc})
+    pd.DataFrame(rows).to_csv(DATA_DIR / "raw_cnn_results.csv", index=False)
+    print(f"  Saved → {DATA_DIR / 'raw_cnn_results.csv'}")
+
+    # Figure: raw CNN vs XGBoost vs feature-based CNN comparison
+    fig, ax = plt.subplots(figsize=(9, 5))
+    models  = ["XGBoost\n(Feature-based)", "Feature-based CNN\n(15→(15,1))",
+               "Raw-Signal CNN\n(1024-point window)"]
+    # We'll load feature-based CNN acc later; use placeholder if not set
+    accs    = [xgb_acc, float("nan"), mean_acc]
+
+    # Load feature-based CNN from dl_results.csv
+    dl_csv = DATA_DIR / "dl_results.csv"
+    if dl_csv.exists():
+        dl_df = pd.read_csv(dl_csv)
+        feat_cnn_row = dl_df[dl_df["fold"] == "mean"]
+        if not feat_cnn_row.empty:
+            accs[1] = float(feat_cnn_row["test_accuracy"].values[0])
+
+    palette = ["#42A5F5", "#AB47BC", "#FF7043"]
+    bars    = ax.bar(models, accs, color=palette, edgecolor="black", linewidth=0.8, width=0.5)
+    for bar, acc in zip(bars, accs):
+        if not np.isnan(acc):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.004,
+                    f"{acc:.4f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.set_ylabel("Accuracy (5-Fold CV)", fontsize=12)
+    ax.set_ylim(0, 1.12)
+    ax.set_title(
+        "GAP 1: Feature-based vs Raw-Signal CNN vs XGBoost\n"
+        "(Feature CNN on tabular input ≠ fair DL comparison)",
+        fontsize=11, fontweight="bold",
+    )
+    ax.grid(axis="y", linestyle="--", alpha=0.5)
+    # Add annotation distinguishing the two CNN experiments
+    ax.annotate(
+        "Feature-based CNN applies Conv1D\nto pre-summarised features (not raw signals)",
+        xy=(0.55, accs[1] - 0.05 if not np.isnan(accs[1]) else 0.85),
+        xytext=(0.2, 0.6),
+        xycoords=("data", "data"),
+        textcoords=("data", "data"),
+        fontsize=8, color="#AB47BC",
+        arrowprops=dict(arrowstyle="->", color="#AB47BC"),
+    )
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / "raw_cnn_vs_xgboost.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved → {FIGURES_DIR / 'raw_cnn_vs_xgboost.png'}")
+
+    # Print interpretation
+    print("\n  Interpretation:")
+    print("  The feature-based CNN operates on 15 pre-engineered statistics —")
+    print("  this is NOT a fair test of deep learning vs classical ML. The")
+    print("  raw-signal CNN above is the correct comparison: can end-to-end DL")
+    print("  match XGBoost when features are NOT pre-computed?")
+    if mean_acc >= xgb_acc - 0.02:
+        print(f"  → Raw-signal CNN ({mean_acc:.4f}) is competitive with XGBoost ({xgb_acc:.4f}).")
+        print("    The gap between feature-based CNN and XGBoost does NOT mean DL is inferior.")
+    else:
+        print(f"  → Even raw-signal CNN ({mean_acc:.4f}) is below XGBoost ({xgb_acc:.4f}).")
+        print("    This confirms XGBoost + feature engineering outperforms end-to-end DL")
+        print("    on this dataset size. More data may be needed to close the gap.")
+
+    return result
 
 
 if __name__ == "__main__":

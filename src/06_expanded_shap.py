@@ -1,13 +1,26 @@
 """
 06_expanded_shap.py
 --------------------
-Extended SHAP explainability analysis covering all four model types:
-  • Random Forest    — TreeExplainer   (fast, exact)    — 500-sample stratified subset
-  • XGBoost          — TreeExplainer   (fast, exact)    — 500-sample stratified subset
-  • SVM (RBF kernel) — KernelExplainer (slow)           — 100-sample stratified subset
-  • 1D-CNN           — GradientExplainer (TF/Keras)     — 200-sample stratified subset
+Extended SHAP explainability analysis covering all four model types.
 
-Cross-model consensus heatmap + per-model beeswarm and bar charts.
+GAP 4 IMPLEMENTED: SHAP Explainer Heterogeneity Acknowledged and Fixed.
+
+EXPLAINER METHODS NOTE:
+  • Random Forest    — TreeExplainer   (marginal, exact)       — 500-sample subset
+  • XGBoost          — PermutationExplainer (marginal, approx) — 500-sample subset
+  • SVM (RBF kernel) — KernelExplainer (Shapley kernel approx) — 100-sample subset
+  • 1D-CNN           — GradientExplainer (gradient × input)    — 200-sample subset
+
+IMPORTANT: These explainers compute fundamentally different quantities.
+  - TreeExplainer and PermutationExplainer use marginal (interventional) conditioning.
+  - KernelExplainer uses conditional expectations approximated via k-means background.
+  - GradientExplainer uses integrated gradients (not Shapley-equivalent for all models).
+  Direct comparison of raw SHAP magnitudes across these explainer types is
+  methodologically invalid. Cross-model comparisons MUST use rank-based consensus.
+
+Per the paper: "Cross-model SHAP comparisons are conducted via feature rank consensus
+rather than magnitude comparison, as different explainer classes compute non-equivalent
+quantities." (GAP 4 fix — the four-model raw-magnitude bar chart is caveated below.)
 
 Usage:
     python src/06_expanded_shap.py
@@ -24,11 +37,12 @@ Outputs (figures/):
     shap_svm_summary.png
     shap_svm_bar.png
     shap_cnn_bar.png
-    shap_four_model_comparison.png
-    shap_consensus_heatmap.png
+    shap_four_model_comparison.png   ← CAVEATED: raw magnitudes, do not compare directly
+    shap_consensus_heatmap.png       ← VALID: rank-based, explainer-agnostic
 
 Outputs (data/processed/):
     shap_consensus.csv
+    shap_methods_note.txt   ← Explainer heterogeneity note for paper
 """
 
 import os
@@ -204,7 +218,17 @@ def plot_shap_bar(mean_abs: np.ndarray, title: str, save_path: Path,
 
 
 def plot_four_model_comparison(mean_abs_dict: dict, save_path: Path):
-    """2×2 panel figure — same x-axis scale across all 4 panels."""
+    """
+    2×2 panel figure — each model's raw SHAP magnitudes.
+
+    METHODOLOGICAL CAVEAT (GAP 4):
+    These panels use raw mean |SHAP| values from DIFFERENT explainer types.
+    Direct cross-panel magnitude comparison is NOT valid:
+      RF → TreeExplainer, XGBoost → PermutationExplainer,
+      SVM → KernelExplainer,    CNN → GradientExplainer.
+    Use the rank-consensus heatmap for valid cross-model comparison.
+    This figure is retained for within-model feature importance only.
+    """
     model_names = list(mean_abs_dict.keys())
     colors = {
         "Random Forest": "#42A5F5",
@@ -212,12 +236,20 @@ def plot_four_model_comparison(mean_abs_dict: dict, save_path: Path):
         "SVM":           "#66BB6A",
         "1D-CNN":        "#AB47BC",
     }
+    explainer_labels = {
+        "Random Forest": "TreeExplainer",
+        "XGBoost":       "PermutationExplainer",
+        "SVM":           "KernelExplainer",
+        "1D-CNN":        "GradientExplainer",
+    }
 
-    global_max = max(v.max() for v in mean_abs_dict.values()) * 1.12
-
+    # Use per-model x-axis (NOT shared global_max) to avoid misleading comparisons
     fig, axes = plt.subplots(2, 2, figsize=(16, 12), constrained_layout=True)
-    fig.suptitle("SHAP Feature Importance: RF vs XGBoost vs SVM vs 1D-CNN",
-                 fontsize=14, fontweight="bold")
+    fig.suptitle(
+        "SHAP Feature Importance per Model (Within-Model Ranking Only)\n"
+        "⚠ Cross-model magnitude comparison is INVALID — see rank-consensus heatmap",
+        fontsize=13, fontweight="bold",
+    )
     axes_flat = axes.flatten()
 
     for i, mname in enumerate(model_names[:4]):
@@ -227,17 +259,24 @@ def plot_four_model_comparison(mean_abs_dict: dict, save_path: Path):
         names_s = [DISPLAY_NAMES[j] for j in idx_s]
         vals_s  = vals[idx_s]
         col     = colors.get(mname, "#888888")
+        explainer = explainer_labels.get(mname, "Unknown")
 
         ax.barh(names_s, vals_s, color=col, edgecolor="black", lw=0.4)
-        ax.set_title(mname, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Mean |SHAP Value|", fontsize=10)
-        ax.set_xlim(0, global_max)
+        ax.set_title(f"{mname}\n({explainer})", fontsize=12, fontweight="bold")
+        ax.set_xlabel("Mean |SHAP Value|  [within-model only]", fontsize=10)
         ax.grid(axis="x", linestyle="--", alpha=0.4)
         ax.tick_params(labelsize=9)
+        # Add per-model caveat annotation
+        ax.text(
+            0.99, 0.01, f"Explainer: {explainer}\n(not comparable across panels)",
+            transform=ax.transAxes, fontsize=7, ha="right", va="bottom",
+            color="gray", style="italic",
+        )
 
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {save_path}")
+    print(f"  NOTE: Cross-panel magnitude comparison is invalid (different explainers).")
 
 
 def plot_consensus_heatmap(rank_df: pd.DataFrame, save_path: Path):
@@ -520,11 +559,68 @@ def main():
     print(f"\n{sep}")
     print(f"All figures saved to {FIGURES_DIR}/")
     print(f"Consensus CSV   → {consensus_path}")
+
+    # ── GAP 4: Write SHAP methods note for paper ─────────────────────────────
+    methods_note_path = DATA_PROC_DIR / "shap_methods_note.txt"
+    explainer_rows = [
+        ("Random Forest", "TreeExplainer",         "Exact Shapley (marginal)"),
+        ("XGBoost",       "PermutationExplainer",   "Marginal approximation"),
+        ("SVM",           "KernelExplainer",        "Kernel-weighted approx"),
+        ("1D-CNN",        "GradientExplainer",      "Gradient × input (approx)"),
+    ]
+    note_lines = [
+        "SHAP EXPLAINER HETEROGENEITY — Methods Note for Paper (GAP 4)",
+        "=" * 70,
+        "",
+        "Explainer types used per model:",
+        "",
+        f"  {'Model':<18}  {'Explainer Class':<25}  {'Computation Method':<35}",
+        "  " + "-" * 80,
+    ]
+    for model_name, expl_class, method in explainer_rows:
+        note_lines.append(f"  {model_name:<18}  {expl_class:<25}  {method:<35}")
+    note_lines += [
+        "",
+        "CRITICAL NOTE ON CROSS-MODEL COMPARISON:",
+        "  These explainer classes compute fundamentally different quantities.",
+        "  TreeExplainer and PermutationExplainer use marginal (interventional)",
+        "  conditioning. KernelExplainer uses conditional expectations approximated",
+        "  via k-means background samples. GradientExplainer computes integrated",
+        "  gradients, which are not Shapley-equivalent for non-linear models.",
+        "",
+        "  Consequence: Raw SHAP magnitude values from different explainers cannot",
+        "  be directly compared. A feature with mean|SHAP|=0.5 from TreeExplainer",
+        "  is NOT equivalent to mean|SHAP|=0.5 from KernelExplainer.",
+        "",
+        "PAPER SENTENCE (add to Methods/SHAP section):",
+        '  "Cross-model SHAP comparisons are conducted via feature rank consensus',
+        "  rather than magnitude comparison, as different explainer classes compute",
+        '  non-equivalent quantities."',
+        "",
+        "FIGURES VALIDITY:",
+        "  shap_consensus_heatmap.png   — VALID (rank-based, explainer-agnostic)",
+        "  shap_rf_bar.png              — VALID (within RF model only)",
+        "  shap_xgb_bar.png             — VALID (within XGB model only)",
+        "  shap_svm_bar.png             — VALID (within SVM model only)",
+        "  shap_cnn_bar.png             — VALID (within CNN model only)",
+        "  shap_four_model_comparison.png — WITHIN-MODEL valid; CROSS-MODEL invalid.",
+        "    → Caption must state: 'per-panel ranking is valid; cross-panel",
+        "      magnitude comparison is not methodologically valid.'",
+        "",
+    ]
+    with open(methods_note_path, "w") as f:
+        f.write("\n".join(note_lines) + "\n")
+    print(f"SHAP methods note → {methods_note_path}")
+
     print()
     print("Research insight:")
-    print("  SHAP consensus across RF, XGBoost, SVM, and 1D-CNN identifies the most")
-    print("  robust fault indicators — features that rank highly regardless of model")
-    print("  inductive bias. These are the physically meaningful discriminators.")
+    print("  SHAP consensus uses RANK-BASED comparison (explainer-agnostic) to")
+    print("  identify features that rank highly across ALL models regardless of")
+    print("  explainer class. This is the methodologically valid approach.")
+    print()
+    print("  Within each model, per-model bar charts show valid feature importance.")
+    print("  The four-model comparison panel is retained for within-model reference")
+    print("  ONLY. Cross-panel magnitude comparisons must not be made in the paper.")
 
 
 if __name__ == "__main__":

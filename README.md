@@ -4,37 +4,58 @@ A complete research pipeline for 7-class bearing fault detection using the CWRU 
 
 ---
 
-## Central Research Findings
+## Primary Contribution: Severity Generalisation Gap
 
-### Finding 1 — Classical ML Outperforms 1D-CNN on Engineered Features
+Standard 5-fold CV on CWRU produces near-perfect accuracy because the model has seen all fault severities during training. A **severity generalisation experiment** (train on 0.007" and 0.014", test on unseen 0.021") reveals class-specific gaps of up to **19.4 percentage points** — this is the core methodological contribution of the paper. CV accuracy alone is insufficient to assess real-world deployability.
 
-XGBoost achieves the highest 5-fold CV accuracy (99.10%) — outperforming a 1D-CNN (97.95%) on the same feature set. This challenges the assumption that deep learning is always superior for fault detection.
+---
 
-| Model | Type | Accuracy (5-fold CV) | Macro F1 |
-|---|---|---|---|
-| XGBoost | Classical ML | **99.10%** | **0.9917** |
-| Random Forest | Classical ML | 98.54% | 0.9856 |
-| 1D-CNN | Deep Learning | 97.95% | — |
-| KNN | Classical ML | 94.98% | 0.9497 |
-| SVM | Classical ML | 92.83% | 0.9283 |
-| Autoencoder | Unsupervised | 100%† | N/A |
+## Research Findings
 
-† Mean fault detection rate; false positive rate on normal class = 1.33%.
+### Finding 1 — Severity Generalisation Gap is the Key Metric (Primary)
 
-### Finding 2 — The CV/Generalisation Gap
+Per-class generalisation gaps (train small severities → test unseen 0.021") vary significantly across fault classes and model types. Classes with low SNR at the measurement location (FE_ball) show the largest generalisation gaps (Table 8 + Figure 8).
 
-Standard 5-fold CV on CWRU produces near-perfect accuracy because the model has seen all fault severities during training. A **severity generalisation test** (train on 0.007" and 0.014", test on 0.021") reveals a gap of up to **19.4 percentage points**, which is the core methodological argument of the paper.
+### Finding 2 — Two Distinct CNN Experiments (GAP 1 Corrected)
 
-### Finding 3 — High Band Energy is the Universal Discriminating Feature
+Two CNN experiments with fundamentally different inputs are reported:
 
-Multi-model SHAP consensus across RF, XGBoost, SVM, and CNN identifies **High Band Energy** as the only feature ranked in the top 5 by all four models simultaneously (mean rank 2.75). Spectral Centroid and Mean follow closely.
+**(a) Feature-based CNN** (15 pre-engineered features → reshaped to (15,1)): XGBoost wins. This result does NOT mean "deep learning is inferior" — it only shows tree ensembles beat CNNs on pre-summarised tabular input.
 
-| Feature | RF Rank | XGBoost Rank | SVM Rank | CNN Rank | Mean Rank | Consensus |
-|---|---|---|---|---|---|---|
-| High Band Energy | 2 | 1 | 5 | 3 | 2.75 | ★ All-model top-5 |
-| Spectral Centroid | 4 | 6 | 1 | 2 | 3.25 | |
-| Mean | 1 | 2 | 6 | 5 | 3.50 | |
-| Mid Band Energy | 3 | 8 | 2 | 1 | 3.50 | |
+**(b) Raw-signal CNN** (1024-point windows directly from .mat files, no feature engineering): This is the real DL vs ML question. Results at both architectures are reported in Table 3.
+
+| Model | Input Type | Accuracy (5-fold CV) |
+|---|---|---|
+| XGBoost | 15 engineered features | **99.10%** |
+| Random Forest | 15 engineered features | 98.54% |
+| Feature-based CNN | (15, 1) tabular reshape | 97.95% |
+| Raw-signal CNN | (1024, 1) raw vibration | — (see Table 3) |
+| KNN | 15 engineered features | 94.98% |
+| SVM | 15 engineered features | 92.83% |
+
+### Finding 3 — VAE Augmentation: Balancing vs Accuracy (GAP 2 Corrected)
+
+A full ablation study (Table 7) reports all model accuracies under (a) real-only, class-imbalanced data and (b) real + VAE synthetic, balanced data. The paper's claim about VAE is calibrated: if improvements are <0.5%, augmentation is framed as data balancing rather than a performance boost.
+
+### Finding 4 — FE_ball is Hard for a Physical Reason (GAP 6)
+
+FE_ball is consistently the lowest-performing class across all models (RF: 0.968, XGBoost: 0.979, KNN: 0.870). Signal SNR analysis on raw .mat files (Figure 9) quantifies the transmission path attenuation between DE and FE accelerometer locations, transforming this black-box accuracy gap into a physically interpretable finding.
+
+### Finding 5 — High Band Energy is the Universal SHAP Feature (Rank-Based)
+
+Multi-model SHAP rank consensus (cross-model magnitude comparison is invalid due to explainer heterogeneity — see GAP 4) identifies **High Band Energy** as the only feature in the top 5 of all four models simultaneously (mean rank 2.75).
+
+| Feature | RF Rank | XGBoost Rank | SVM Rank | CNN Rank | Mean Rank |
+|---|---|---|---|---|---|
+| High Band Energy | 2 | 1 | 5 | 3 | 2.75 |
+| Spectral Centroid | 4 | 6 | 1 | 2 | 3.25 |
+| Mean | 1 | 2 | 6 | 5 | 3.50 |
+
+*Note: Ranks are used (not magnitudes) because TreeExplainer, PermutationExplainer, KernelExplainer, and GradientExplainer compute non-equivalent quantities.*
+
+### Finding 6 — Autoencoder Detection is Within-Distribution Only (GAP 5)
+
+The 100% fault detection rate (Table 5) is a within-distribution result on highly separable engineered features (mean separation ratio >>1×). When trained exclusively on 0.007" severity samples and tested on 0.021" unseen severity, detection rate degrades significantly, confirming the autoencoder operates as a within-distribution anomaly detector with known generalisation limits.
 
 ---
 
@@ -69,10 +90,7 @@ Place downloaded `.mat` files in `data/raw/`.
 data/raw/*.mat
       │
       ▼
-01_load_and_preprocess.py     →  data/processed/features.csv  (3-class, initial)
-      │
-      ▼
-save_features_expanded.py     →  data/processed/features_expanded.csv  (7-class, 11,945 windows)
+01_load_and_preprocess.py     →  data/processed/features_expanded.csv  (7-class, 11,945 windows)
       │
       ▼
 02_train_models_expanded.py   →  model_results_expanded.csv, noise_robustness_expanded.csv
@@ -82,15 +100,24 @@ save_features_expanded.py     →  data/processed/features_expanded.csv  (7-clas
                                   models/vae_class_*/encoder.keras + decoder.keras
       │
       ▼
-05_dl_comparison.py           →  dl_results.csv, autoencoder_results.csv
+05_dl_comparison.py           →  dl_results.csv, raw_cnn_results.csv,
+                                  autoencoder_results.csv
                                   models/cnn_best_fold.keras
       │
       ▼
-06_expanded_shap.py           →  shap_consensus.csv  +  figures/shap_*.png
+06_expanded_shap.py           →  shap_consensus.csv, shap_methods_note.txt
+                                  figures/shap_*.png
+      │
+      ▼  (new scripts — run after 06)
+07_vae_ablation.py            →  vae_ablation_results.csv   (Table 7)
+08_severity_generalisation.py →  severity_gen_results.csv,  (Table 8, Figure 8)
+                                  noise_crossover_fine.csv
+09_autoencoder_hard.py        →  autoencoder_hard_results.csv  (Table 5 appendix)
+10_signal_snr_analysis.py     →  signal_snr_results.csv        (Figure 9)
       │
       ▼
-paper/generate_paper_assets.py →  paper/tables/  (6 tables)
-                                   paper/figures/ (7 IEEE figures)
+paper/generate_paper_assets.py →  paper/tables/  (8 tables)
+                                   paper/figures/ (9 IEEE figures)
 ```
 
 **Extracted features (15 total):**
@@ -132,7 +159,9 @@ windproject/
 │   │   ├── table3_ml_vs_dl_comparison.*  ← All 6 models head-to-head
 │   │   ├── table4_cnn_crossval.*         ← CNN fold-by-fold results
 │   │   ├── table5_autoencoder_detection.*← Per-class detection rates + FPR
-│   │   └── table6_shap_consensus.*       ← Top-10 features, all models ranked
+│   │   ├── table6_shap_consensus.*       ← Top-10 features, rank-based consensus
+│   ├── table7_vae_ablation.*         ← VAE ablation: real-only vs real+synthetic
+│   └── table8_severity_gen.*         ← Per-class severity generalisation gap
 │   └── figures/
 │       ├── fig1_class_distribution.*     ← Real vs augmented class counts
 │       ├── fig2_model_comparison.*       ← Accuracy + macro F1 grouped bar chart
@@ -140,15 +169,22 @@ windproject/
 │       ├── fig4_noise_robustness.*       ← Accuracy vs noise, all 5 models
 │       ├── fig5_shap_consensus.*         ← Rank heatmap (green=best, red=worst)
 │       ├── fig6_fault_size_degradation.* ← Macro F1 vs fault diameter
-│       └── fig7_autoencoder_violin.*     ← Reconstruction error distributions
+│       ├── fig7_autoencoder_violin.*     ← Reconstruction error distributions
+│       ├── fig8_severity_gen_gap.*       ← Per-class gen gap + noise crossover
+│       └── fig9_fe_vs_de_signal_analysis.* ← Physics: DE vs FE signal quality
 ├── src/
-│   ├── 01_load_and_preprocess.py
-│   ├── 02_train_models_expanded.py
-│   ├── 04_vae_augmentation.py
-│   ├── 05_dl_comparison.py
-│   ├── 06_expanded_shap.py
-│   ├── load_cwru_files.py
-│   └── save_features_expanded.py
+│   ├── 01_load_and_preprocess.py         ← Signal loading, 15-feature extraction
+│   ├── 02_train_models_expanded.py       ← RF, XGBoost, SVM, KNN — 5-fold CV
+│   ├── 03_shap_analysis.py               ← Legacy SHAP (3-class)
+│   ├── 04_vae_augmentation.py            ← VAE per-class data balancing
+│   ├── 05_dl_comparison.py               ← Feature CNN + Raw-signal CNN (GAP 1)
+│   ├── 06_expanded_shap.py               ← Multi-model SHAP, rank consensus (GAP 4)
+│   ├── 07_vae_ablation.py                ← VAE ablation study (GAP 2)
+│   ├── 08_severity_generalisation.py     ← Severity gen gap + noise crossover (GAP 3)
+│   ├── 09_autoencoder_hard.py            ← Autoencoder reframing (GAP 5)
+│   ├── 10_signal_snr_analysis.py         ← FE_ball physics analysis (GAP 6)
+│   ├── load_cwru_files.py                ← CWRU file loader utility
+│   └── save_features_expanded.py         ← Legacy feature save helper
 └── README.md
 ```
 
@@ -163,21 +199,29 @@ Each table is saved as both `.csv` (machine-readable) and `.txt` (LaTeX-ready, c
 pip install pandas numpy scipy scikit-learn xgboost shap matplotlib seaborn
 pip install tensorflow tensorflow-metal   # for CNN and VAE (Apple Silicon)
 
-# 2. Place CWRU .mat files in data/raw/
+# 2. Place CWRU .mat files in:
+#      data/raw/DE_12k/   ← drive-end fault .mat files
+#      data/raw/FE_12k/   ← fan-end fault .mat files
+#      data/raw/normal/   ← normal baseline .mat files
 
-# 3. Run pipeline in order
+# 3. Run core pipeline (scripts 01–06)
 python src/01_load_and_preprocess.py
-python src/save_features_expanded.py
 python src/02_train_models_expanded.py
 python src/04_vae_augmentation.py
-python src/05_dl_comparison.py
-python src/06_expanded_shap.py
+python src/05_dl_comparison.py          # includes raw-signal CNN (GAP 1)
+python src/06_expanded_shap.py          # rank-based consensus (GAP 4)
 
-# 4. Generate paper tables and figures
+# 4. Run rigour/ablation scripts (scripts 07–10)
+python src/07_vae_ablation.py           # VAE ablation → Table 7 (GAP 2)
+python src/08_severity_generalisation.py # severity gen + crossover → Table 8, Fig 8 (GAP 3)
+python src/09_autoencoder_hard.py       # autoencoder reframing (GAP 5)
+python src/10_signal_snr_analysis.py    # FE_ball physics → Figure 9 (GAP 6)
+
+# 5. Generate all 8 tables and 9 IEEE figures
 python paper/generate_paper_assets.py
 ```
 
-> **Note for Apple Silicon:** TensorFlow-Metal GPU can cause silent BatchNorm gradient bugs. Script 05 forces CPU by setting `CUDA_VISIBLE_DEVICES=-1`. This is intentional.
+> **Note for Apple Silicon:** TensorFlow-Metal GPU can cause silent BatchNorm gradient bugs. Scripts 05, 07, 09 force CPU by setting `tf.config.set_visible_devices([], "GPU")`. This is intentional.
 
 Each script is self-contained and prints a summary on completion.
 
@@ -202,8 +246,17 @@ Each script is self-contained and prints a summary on completion.
 - SVM degrades least (92.83% → 77.77%)
 - XGBoost degrades most steeply among classical models (99.10% → 57.81%)
 - CNN holds to 64.34% at 30% noise
+- SVM surpasses XGBoost at a precise noise crossover threshold (reported in Figure 8b)
 
-**SHAP consensus:** High Band Energy is the only feature in the top-5 of all four models.
+**VAE Ablation (Table 7):** Accuracy and macro F1 under real-only vs real+synthetic conditions per model. Improvement Δ reported; small Δ (<0.005) is reframed as data balancing, not performance gain.
+
+**Severity Generalisation (Table 8):** Per-class gap for each model when training on small severities (0.007"+0.014") and testing on unseen 0.021". Largest gaps indicate classes with poor severity generalisation.
+
+**Autoencoder Reframing:** The reported 100% detection rate is within-distribution. Separation ratio quantifies trivial separability. Detection on 0.021" (trained on 0.007" only) is the meaningful metric.
+
+**SHAP (Rank-based):** High Band Energy is the only feature in the top-5 of all four models. Cross-model SHAP magnitude comparisons are NOT made (different explainer types: TreeExplainer, PermutationExplainer, KernelExplainer, GradientExplainer).
+
+**FE_ball Physics:** Signal SNR analysis (Figure 9) quantifies DE/FE path attenuation in dB, explaining why FE_ball is the hardest class across all models.
 
 ---
 
