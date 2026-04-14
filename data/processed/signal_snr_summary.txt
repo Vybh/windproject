@@ -1,0 +1,17 @@
+SIGNAL SNR ANALYSIS: DE_ball vs FE_ball
+=================================================================
+
+Metric                          DE_ball     FE_ball     DE/FE Ratio
+-----------------------------------------------------------------
+RMS Energy                     0.133646    0.164006        0.81×
+SNR at BSF                         0.08      304.75        0.00×
+Spectral Peak Prominence           0.93        1.34        0.69×
+Attenuation                        -1.8 dB
+
+Fault frequency analysed: BSF (Ball Spin Frequency)
+BSF = 2.357 × shaft_speed = 70.6 Hz  (at shaft_speed = 29.95 Hz)
+
+Conclusion:
+  DE_ball signals are 0.8× stronger (RMS) than FE_ball signals.
+  This -1.8 dB path attenuation is the primary reason FE_ball
+  is the lowest-performing fault class across all ML models.

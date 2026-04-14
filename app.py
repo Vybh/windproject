@@ -53,8 +53,13 @@ st.markdown("""
       padding: 0.9rem 1.1rem;
       border-radius: 0 6px 6px 0;
       margin-bottom: 0.8rem;
+      color: #1a1a1a !important;
   }
-  .finding-title { font-weight: 700; margin-bottom: 0.25rem; }
+  .finding-box * { color: #1a1a1a !important; }
+  .finding-title { font-weight: 700; margin-bottom: 0.25rem; color: #1a1a1a !important; }
+  .section-body { color: #333 !important; }
+  .section-label { color: #666 !important; }
+  .step-badge { color: white !important; }
   hr.thin { border: none; border-top: 1px solid #e0e0e0; margin: 2.5rem 0; }
 </style>
 """, unsafe_allow_html=True)

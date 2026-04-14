@@ -1,7 +1,7 @@
 Model,Type,Accuracy,Macro F1,Notes
 Random Forest,Classical ML,0.9854,0.9863,5-fold CV; 200 trees
-XGBoost,Classical ML,0.9910,0.9920,5-fold CV; 200 estimators
+XGBoost,Classical ML,0.9910,0.9913,5-fold CV; 200 estimators
 KNN,Classical ML,0.9498,0.9500,5-fold CV; k=5
 SVM,Classical ML,0.9283,0.9540,5-fold CV; RBF kernel
-1D-CNN,Deep Learning,0.9795,0.9551,5-fold CV; tabular features
+1D-CNN,Deep Learning,0.9822,0.9932,5-fold CV; tabular features
 Autoencoder,Unsupervised,1.0000†,N/A,†mean fault detection rate; FPR=0.0133
