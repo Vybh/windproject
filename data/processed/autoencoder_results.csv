@@ -1,0 +1,8 @@
+class,n_samples,n_detected,detection_rate,false_positive_rate
+DE_ball,1894,1894,1.0,
+DE_inner_race,1893,1893,1.0,
+DE_outer_race,1425,1425,1.0,
+FE_ball,1416,1416,1.0,
+FE_inner_race,1416,1416,1.0,
+FE_outer_race,2477,2477,1.0,
+normal,1424,19,0.013342696629213483,0.013342696629213483

@@ -1,0 +1,8 @@
+Class,Total Samples,Detected as Anomaly,Detection Rate,Notes
+DE_ball,1894,1894,1.0000,Drive-End bearing fault
+DE_inner_race,1893,1893,1.0000,Drive-End bearing fault
+DE_outer_race,1425,1425,1.0000,Drive-End bearing fault
+FE_ball,1416,1416,1.0000,Fan-End bearing fault
+FE_inner_race,1416,1416,1.0000,Fan-End bearing fault
+FE_outer_race,2477,2477,1.0000,Fan-End bearing fault
+normal (FPR),1424,19,0.0133,False positive rate

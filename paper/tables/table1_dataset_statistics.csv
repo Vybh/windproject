@@ -1,0 +1,9 @@
+Class,Bearing Location,Fault Sizes (in),Real Windows,Synthetic Added,Final Count
+DE_ball,DE,"0.007, 0.014, 0.021, 0.028",1894,583,2477
+DE_inner_race,DE,"0.007, 0.014, 0.021, 0.028",1893,584,2477
+DE_outer_race,DE,"0.007, 0.014, 0.021",1425,1052,2477
+FE_ball,FE,"0.007, 0.014, 0.021",1416,1061,2477
+FE_inner_race,FE,"0.007, 0.014, 0.021",1416,1061,2477
+FE_outer_race,FE,"0.007, 0.014, 0.021, 0.028",2477,0,2477
+normal,DE+FE,N/A,1424,1053,2477
+TOTAL,—,—,11945,5394,17339
